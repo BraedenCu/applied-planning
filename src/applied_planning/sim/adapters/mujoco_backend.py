@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
+import time
+import mujoco
+import mujoco.viewer as mj_viewer  # type: ignore
 
-try:
-    import mujoco  # type: ignore
-except Exception:  # pragma: no cover - optional at dev time
-    mujoco = None  # lazy import; class guards usage
-
+from ...control.planners import plan_joint_path
 from .base import Action, Observation, SimulationAdapter
 
 
@@ -73,9 +72,6 @@ class MujocoLite6Adapter(SimulationAdapter):
         # Only try to launch viewer if explicitly enabled and not already created
         if self.viewer_enabled and self._viewer is None:
             try:
-                # Try using the standard viewer which works better on macOS
-                import mujoco.viewer as mj_viewer  # type: ignore
-
                 # Launch in a non-blocking way
                 self._viewer = mj_viewer.launch_passive(self.model, self.data)
                 print("✓ MuJoCo viewer launched")
@@ -95,8 +91,6 @@ class MujocoLite6Adapter(SimulationAdapter):
         # Expect action as joint velocity or torque; for now assume joint velocity dict
         qvel_cmd = action.get("qvel")
         if qvel_cmd is not None:
-            import numpy as np
-
             self.data.qvel[: len(qvel_cmd)] = np.asarray(qvel_cmd)
         mujoco.mj_step(self.model, self.data)
         if self._viewer is not None:
@@ -111,8 +105,6 @@ class MujocoLite6Adapter(SimulationAdapter):
         return {"qpos": self.data.qpos.copy(), "qvel": self.data.qvel.copy()}
 
     def set_state(self, state: Dict[str, Any]) -> None:
-        import numpy as np
-
         qpos = state.get("qpos")
         qvel = state.get("qvel")
         if qpos is not None:
@@ -184,8 +176,6 @@ class MujocoLite6Adapter(SimulationAdapter):
         Returns:
             List of waypoints in the planned path, or None if planning failed
         """
-        from ...control.planners import plan_joint_path
-
         start = self.data.qpos[:6].copy()
 
         constraints = {
@@ -219,8 +209,6 @@ class MujocoLite6Adapter(SimulationAdapter):
             speed_factor: Scaling factor for execution speed (1.0 = normal, <1.0 = slower)
             steps_per_waypoint: Number of simulation steps between waypoints for smooth motion
         """
-        import time
-
         if velocity_control:
             # Velocity control mode
             for i, waypoint in enumerate(path):

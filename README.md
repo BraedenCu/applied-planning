@@ -24,6 +24,9 @@ python scripts/fetch_menagerie_lite6.py
 # Run path planning demo with real-time visualization
 python scripts/demo_path_planning.py
 
+# On macosx, append with mjpython for mujoco ui to properly load
+mjpython scripts/demo_path_planning.py
+
 # Or run with different options
 python scripts/demo_path_planning.py --planner linear --speed 0.5
 ```
