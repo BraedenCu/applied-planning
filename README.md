@@ -1,277 +1,170 @@
-# CPSC4850 Final Project: Applied Planning & Optimization
+# Applied Planning & Optimization
+
+6DOF Robot Arm Path Planning in MuJoCo
 
 Contributors: Braeden, Shaurya, Avril
 
-## Relevant Documentation
+## Overview
 
-- [MuJoCo uFactory Lite6 (mujoco_menagerie)](https://github.com/google-deepmind/mujoco_menagerie/tree/main/ufactory_lite6)
-- [uFactory Lite6 SDK (xArm Python SDK)](https://github.com/xArm-Developer/xArm-Python-SDK)
-- [uFactory Lite6 RL / gym training env (uf-gym)](https://github.com/xArm-Developer/uf-gym)
-- [uFactory vision documentation (ufactory_vision)](https://github.com/xArm-Developer/ufactory_vision)
-- [uFactory Lite6 user manual (PDF)](https://cdn.robotshop.com/media/U/Ufa/RB-Ufa-32/pdf/ufactory-lite-6-user-manual.pdf)
-- [Setting up a manipulator — blog post](https://shrenikm.com/posts/2024-03-08-setting-up-a-manipulator/)
+Simulation and control framework for the uFactory Lite 6 robot arm with path planning capabilities. Supports both MuJoCo (macOS-friendly) and future Isaac Sim backends.
 
-## Project Milestones
+## Quick Start
 
-- Implement collision checking, perform sweeping motions on physical bot
-- Operate physical bot using only brief python commands to move from one location to another
-- Stack a cube using teleoperation
-- Stack a cube automatically using RL or some other protocol
+```bash
+# Install dependencies
+uv venv --python 3.10 && source .venv/bin/activate
+uv pip install -e .
 
-## Technical Architecture
+# Optional: Install MuJoCo
+uv pip install mujoco
 
-This section summarizes the system design. A standalone copy also lives in `ARCHITECTURE.md`.
+# Fetch robot assets
+python scripts/fetch_menagerie_lite6.py
 
-- Primary robot: uFactory Lite 6 (per README references)
-- OS for development: macOS (local CPU/GPU constraints; no NVIDIA)
-- Target future simulator: NVIDIA Isaac Sim (Linux + NVIDIA GPU)
-- Middleware baseline: ROS 2 interface contracts (to ease migration), with a direct in-process path for early macOS work
+# Run path planning demo with real-time visualization
+python scripts/demo_path_planning.py
 
----
-
-### Goals and constraints
-
-- Fast local iteration on macOS without an NVIDIA GPU
-- Strong sim-to-real story for the Lite 6 using the vendor SDK
-- Smooth migration path to Isaac Sim and Isaac ROS when a Linux/NVIDIA environment is available
-- Clear module boundaries and testable contracts so components can be swapped (sim backends, planners, controllers)
-
----
-
-### High-level system diagram
-
-```text
-+-------------------------+         +--------------------+
-|  Tasks & Experiments    |<------->|  Orchestrator CLI  |
-|  (pick/place, etc.)     |         |  & Run Scripts     |
-+-----------+-------------+         +---------+----------+
-						|                                 |
-						v                                 v
-+-----------+-------------+        +----------+-----------+
-|   Task Env (Gym API)    |<------>|  Control & Planning  |
-|  (Gymnasium wrapper)    |  obs   |  (policies, MPC,    |
-|                         |  act   |   OMPL/TrajOpt)     |
-+-----------+-------------+        +----------+-----------+
-						|                                 |
-						v                                 v
-+-----------+-------------+        +----------+-----------+
-|  Sim Adapter (Backend)  |<------>|  ROS 2 I/O Adapter   |
-|  - MuJoCo (macOS first) |  opt   |  (topics/actions)    |
-|  - Isaac Sim (later)    |  comm  |  (optional in Phase1)|
-+-----------+-------------+        +----------+-----------+
-						|                                 |
-						v                                 v
-	 +--------+--------+                +-------+--------+
-	 |  Sensors &      |                |  Real Robot    |
-	 |  Visualization  |                |  (Lite 6 via   |
-	 |  (viewer, logs) |                |   xArm SDK)    |
-	 +-----------------+                +----------------+
+# Or run with different options
+python scripts/demo_path_planning.py --planner linear --speed 0.5
 ```
 
----
+## Features
 
-### Core modules and contracts
+- **Path Planning**: RRT and linear interpolation planners for 6DOF arms
+- **MuJoCo Simulation**: Full integration with collision detection and visualization
+- **Modular Architecture**: Easy to swap simulators, planners, and controllers
+- **Joint & Cartesian Planning**: Support for both joint-space and Cartesian-space planning
 
-#### 1. Simulation Backend Adapter
+## Real-Time Visualization
 
-- Purpose: allow swapping MuJoCo now for Isaac Sim later with no upstream changes.
-- Minimal interface (Python):
+To see the robot motion in **real-time in MuJoCo viewer**, run the demo script (not in Jupyter):
 
+```bash
+# Default: RRT planner with interactive viewer
+python scripts/demo_path_planning.py
+
+# Slower motion for better visualization
+python scripts/demo_path_planning.py --speed 0.5
+
+# Use linear interpolation planner (faster planning)
+python scripts/demo_path_planning.py --planner linear
+
+# Run headless (no viewer)
+python scripts/demo_path_planning.py --no-viewer
+```
+
+**Note:** The interactive MuJoCo viewer only works when running as a Python script. It does **not** work in Jupyter notebooks on macOS.
+
+## Usage Example
+
+### Python Script
 ```python
-class SimulationAdapter(Protocol):
-		def reset(self, seed: int | None = None) -> Observation: ...
-		def step(self, action: Action) -> tuple[Observation, float, bool, dict]: ...  # Gym-like
-		def get_state(self) -> dict: ...   # q, dq, base pose, contact, etc.
-		def set_state(self, state: dict) -> None: ...
-		def render(self, mode: str = "human") -> np.ndarray | None: ...
-		def attach_camera(self, name: str, cfg: CameraCfg) -> None: ...
-		def close(self) -> None: ...
+from applied_planning.sim.adapters.mujoco_backend import MujocoLite6Adapter
+import numpy as np
+
+# Initialize simulator with viewer
+sim = MujocoLite6Adapter("path/to/ufactory_lite6.xml", viewer=True)
+sim.reset()
+
+# Define goal configuration
+goal = np.array([0.5, -0.3, 0.8, 0.0, 1.0, 0.0])
+
+# Plan and execute path
+path = sim.plan_and_execute_path(
+    goal=goal,
+    planner_type="rrt",  # or "linear"
+    joint_limits=sim.get_joint_limits(),
+    collision_fn=sim.check_collision,
+    execute=True
+)
+
+if path:
+    print(f"Path found with {len(path)} waypoints")
+else:
+    print("No path found")
 ```
 
-- Phase 1 implementation: MuJoCo (DeepMind), using the uFactory Lite 6 model from the Menagerie
-	- Fast, deterministic, great for control/contacts
-	- Runs well on macOS via Python wheels
-- Phase 2 implementation: Isaac Sim backend
-	- Runs in Linux + NVIDIA GPU environment, with ROS 2 bridges
-
-#### 2. Task Environment (Gymnasium)
-
-- Purpose: unify task logic (reward/termination/metrics) independent of the simulator backend
-- Implements Gymnasium Env; holds the SimulationAdapter instance
-- Encodes observation/action spaces and conversions
-- Easy to plug into RL training or classical control sweeps
-
-#### 3. Control & Planning
-
-- Control modes: joint velocity/torque, Cartesian impedance/OS control
-- Planning backends:
-	- Short horizon MPC/trajectory optimization (e.g., crocoddyl for dynamics, or a lightweight MPPI)
-	- Sampling-based motion planning (OMPL via MoveIt 2 later; for Phase 1, keep a Python-friendly planner such as `ompl` Python bindings or `trajopt`)
-- Contract:
-
+### Jupyter Notebook
 ```python
-class Controller(Protocol):
-		def reset(self): ...
-		def act(self, obs: Observation, goal: Goal) -> Action: ...
+# Note: Interactive viewer doesn't work in notebooks on macOS
+# Use headless or offscreen rendering instead
+
+from applied_planning.sim.adapters.mujoco_backend import MujocoLite6Adapter
+import numpy as np
+
+# Initialize in headless mode
+sim = MujocoLite6Adapter(
+    "path/to/ufactory_lite6.xml",
+    viewer=False,
+    render_mode="none"  # or "offscreen" for visualization
+)
+sim.reset()
+
+# Plan path
+goal = np.array([0.5, -0.3, 0.8, 0.0, 1.0, 0.0])
+path = sim.plan_and_execute_path(
+    goal=goal,
+    planner_type="rrt",
+    joint_limits=sim.get_joint_limits(),
+    execute=False
+)
+
+# Optionally visualize with offscreen rendering
+if sim.render_mode == "offscreen":
+    import matplotlib.pyplot as plt
+    img = sim.render_notebook()
+    plt.imshow(img)
+    plt.show()
 ```
 
-#### 4. Perception
+## Architecture
 
-- Start simple: simulated cameras from MuJoCo, depth/segmentation if needed
-- Optional ROS 2 camera topics later when on Isaac Sim or real hardware
-- Keep a `PerceptionAdapter` that can switch between simulated frames and real camera drivers
+**Modular design** with swappable components:
+- **Sim Adapters**: MuJoCo (current), Isaac Sim (future)
+- **Planners**: RRT, linear interpolation, Cartesian planning (IK-based)
+- **Controllers**: Joint velocity/torque, Cartesian impedance
+- **Environments**: Gymnasium API for RL integration
 
-#### 5. ROS 2 I/O Adapter
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed system design.
 
-- Abstracts pub/sub/actions so that nodes can be run:
-	- In-process (Phase 1) with no ROS 2 required on macOS
-	- Over ROS 2 (Phase 2/3) for Isaac Sim and the real robot
-- Message schema mirrors ROS 2 types; provide lightweight dataclasses and converters
+## Installation
 
-#### 6. Data, Logging, and Visualization
+```bash
+# Install uv (macOS)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-- Episode logs: actions, observations, rewards, images
-- Live visualization: MuJoCo viewer locally; later Isaac Sim viewport
-- Experiment tracking: Weights & Biases or MLflow (optional)
+# Setup environment
+uv venv --python 3.10 && source .venv/bin/activate
 
----
+# Install options
+uv pip install -e .              # Base
+uv pip install -e .[dev]         # With dev tools
+uv pip install -e .[notebook]    # With Jupyter support
+uv pip install -e .[dev,notebook] # All features
 
-### Technology choices (Phase 1: macOS-friendly)
-
-- Simulation: MuJoCo (DeepMind) with the uFactory Lite 6 model from the Menagerie
-- Wrappers: `gymnasium` for Env API; optional `dm-control` helpers
-- Control/planning: `numpy`, `scipy`, `pinocchio` (kinematics/dynamics), a small MPC/MPPI, optional `ompl` Python bindings or `trajopt`
-- Robot SDK: xArm Python SDK for real Lite 6 (kept separate until sim is mature)
-- Config: `hydra` or `pydantic`-based settings for reproducibility
-- Tooling: `ruff` + `mypy`, `pytest`, minimal `pyproject.toml`
-
-Why not ROS 2 first on macOS? It’s possible but heavy and not as smooth. The adapters keep the path open without slowing Phase 1.
-
----
-
-### Migration to Isaac Sim (Phase 2)
-
-- Swap `SimulationAdapter` to an Isaac Sim implementation
-	- Option A: Use Isaac Sim Python API directly (headless for training; UI for debugging)
-	- Option B: Keep the same Env but run sim in a GPU Linux container and communicate via ROS 2 or Isaac ROS bridges
-- Turn on the ROS 2 adapter for messages/actions
-- Replace visualization with Isaac viewport and Isaac ROS tools (e.g., NITROS, Isaac ROS GEMs)
-
-Result: Tasks, controllers, and policies require minimal changes because their contracts don’t change.
-
----
-
-### Suggested repository layout
-
-```text
-applied-planning/
-├─ ARCHITECTURE.md
-├─ README.md
-├─ pyproject.toml                # Python package and dev tooling
-├─ src/
-│  └─ applied_planning/
-│     ├─ sim/
-│     │  ├─ adapters/
-│     │  │  ├─ mujoco_backend.py
-│     │  │  └─ isaac_backend.py  # stub initially
-│     │  └─ assets/
-│     │     └─ ufactory_lite6/   # URDF/MJCF configs, textures
-│     ├─ envs/
-│     │  └─ lite6_pick_place_env.py
-│     ├─ control/
-│     │  ├─ controllers.py       # impedance, joint, etc.
-│     │  └─ planners.py          # MPC/MPPI, trajopt, OMPL hooks
-│     ├─ perception/
-│     │  └─ adapter.py
-│     ├─ io/
-│     │  └─ ros2_adapter.py      # no-op in Phase1, real in Phase2
-│     ├─ configs/
-│     │  ├─ envs/
-│     │  └─ robot/
-│     └─ utils/
-├─ scripts/
-│  ├─ run_task.py                # launch env + controller
-│  └─ train_policy.py            # optional RL entrypoint
-├─ tests/
-│  └─ test_env_smoke.py
-└─ docs/
-	 └─ diagrams/
+# Install MuJoCo (optional)
+uv pip install mujoco
 ```
 
----
+## Path Planning Methods
 
-### Minimal contracts (copy/paste reference)
+### RRT (Rapidly-exploring Random Tree)
+- Samples random configurations in joint space
+- Efficient for high-DOF robots with obstacles
+- Probabilistically complete
 
-```python
-# src/applied_planning/sim/adapters/base.py
-from typing import Protocol
+### Linear Interpolation
+- Fast, straight-line paths in joint space
+- Good for obstacle-free environments
+- Useful for quick testing
 
-class SimulationAdapter(Protocol):
-		def reset(self, seed: int | None = None): ...
-		def step(self, action): ...  # returns obs, reward, done, info
-		def render(self, mode: str = "human"): ...
-		def get_state(self) -> dict: ...
-		def set_state(self, state: dict) -> None: ...
-```
+### Cartesian Planning
+- Plans in task space (end-effector pose)
+- Requires inverse kinematics solver
+- Ideal for precise positioning tasks
 
-```python
-# src/applied_planning/control/controllers.py
-from typing import Protocol
+## Documentation
 
-class Controller(Protocol):
-		def reset(self): ...
-		def act(self, obs, goal): ...
-```
-
----
-
-### Control and cost design sketch
-
-We’ll frame actions as joint velocity or torque setpoints, with an optional Cartesian impedance controller. A simple quadratic cost is typically effective:
-
-$$
-J = \sum_t \left( \|x_t - x_t^{goal}\|_Q^2 + \|u_t\|_R^2 + \|\Delta u_t\|_{R_d}^2 \right)
-$$
-
-- Choose $Q$ to weight end-effector position/orientation error
-- Choose $R$ and $R_d$ to regularize commands and smoothness
-- Add contact penalties or task-specific costs as needed
-
----
-
-### Phase plan
-
-#### Phase 1 (macOS, MuJoCo)
-
-- Implement MuJoCo backend and a single pick-and-place Env
-- Add a basic Cartesian impedance controller and a script to run episodes locally
-- Log rollouts (states, actions, images)
-
-#### Phase 2 (Linux GPU, Isaac Sim)
-
-- Implement Isaac Sim backend; enable ROS 2 adapter
-- Validate task parity and unit tests across backends
-- Add MoveIt 2/OMPL path planning integration
-
-#### Phase 3 (Real robot)
-
-- Integrate xArm SDK, reuse the ROS 2 adapter for messaging
-- Safety interlocks, workspace limits, e-stop procedures
-
----
-
-### Risks and mitigations
-
-- ROS 2 on macOS: build/runtime friction
-	- Mitigation: in-process adapter for Phase 1; turn on ROS 2 in Phase 2
-- Kinematics/dynamics mismatches across backends
-	- Mitigation: pin parameters in central robot config; unit tests per backend
-- Isaac Sim dependency on NVIDIA/Linux
-	- Mitigation: develop MuJoCo stack on macOS; run Isaac in remote container when available
-
----
-
-### What “done” looks like for Phase 1
-
-- `run_task.py` opens a MuJoCo viewer, runs pick-and-place episodes with a simple controller, and logs results
-- Swapping to `isaac_backend.py` (stub) does not break imports or contracts, establishing the migration path
+- [MuJoCo uFactory Lite6](https://github.com/google-deepmind/mujoco_menagerie/tree/main/ufactory_lite6)
+- [xArm Python SDK](https://github.com/xArm-Developer/xArm-Python-SDK)
+- [uFactory Lite6 Manual](https://cdn.robotshop.com/media/U/Ufa/RB-Ufa-32/pdf/ufactory-lite-6-user-manual.pdf)
