@@ -105,7 +105,7 @@ def main():
         planner_type=args.planner,
         joint_limits=joint_limits,
         collision_fn=None,  # Set to sim.check_collision to enable collision checking
-        execute=False  # We'll execute manually for better visualization
+        execute=False       # We'll execute manually for better visualization
     )
     plan_time = time.time() - start_time
 
