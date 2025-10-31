@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Protocol
-
 import numpy as np
 
 from ..sim.adapters.base import Action, Observation, Goal
