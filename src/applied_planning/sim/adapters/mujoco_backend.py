@@ -298,6 +298,8 @@ class MujocoLite6Adapter(SimulationAdapter):
     def set_state(self, state: Dict[str, Any]) -> None:
         qpos = state.get("qpos")
         qvel = state.get("qvel")
+        gripper = state.get("gripper")  # Optional gripper control
+
         if qpos is not None:
             qpos_array = np.asarray(qpos)
             self.data.qpos[: len(qpos)] = qpos_array
@@ -305,6 +307,11 @@ class MujocoLite6Adapter(SimulationAdapter):
             self._target_qpos = qpos_array[:6].copy() if len(qpos_array) >= 6 else qpos_array.copy()
         if qvel is not None:
             self.data.qvel[: len(qvel)] = np.asarray(qvel)
+
+        # Handle gripper control if provided
+        if gripper is not None:
+            self.set_gripper(gripper)
+
         mujoco.mj_forward(self.model, self.data)
 
     def render(self, mode: str = "human", camera_id: Optional[int] = None):
@@ -813,3 +820,117 @@ class MujocoLite6Adapter(SimulationAdapter):
         quat = self.data.xquat[body_id].copy()  # [w, x, y, z] in MuJoCo
 
         return pos, quat
+
+    def set_gripper(self, gripper_value: float) -> None:
+        """Set gripper position.
+
+        Args:
+            gripper_value: Gripper opening amount.
+                          -1.0 = fully closed (grasp)
+                           1.0 = fully open
+                           Automatically mapped to gripper joint range
+        """
+        try:
+            # Find the gripper actuator (motor control)
+            gripper_actuator_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, "gripper"
+            )
+
+            # Map from [-1, 1] to gripper control range
+            # gripper motor has ctrlrange [-10, 10] but we want position control
+            # Gripper joint range is approximately [-0.0081, 0] for one finger
+            # -1 (closed) -> negative position (fingers together)
+            # +1 (open) -> zero position (fingers apart)
+
+            # Clamp gripper value
+            gripper_value = np.clip(gripper_value, -1.0, 1.0)
+
+            # Map to control range: -1 -> close (negative), +1 -> open (0)
+            # gripper_left_finger range: [-0.0081, -1e-5]
+            target_position = -0.0081 * (1.0 - gripper_value) / 2.0
+
+            # Set the control signal for the gripper motor
+            self.data.ctrl[gripper_actuator_id] = target_position * 1000  # Scale for force
+
+        except Exception:
+            # Gripper control optional - some models may not have it
+            pass
+
+    def get_gripper_position(self) -> float:
+        """Get current gripper position.
+
+        Returns:
+            Normalized gripper position:
+                -1.0 = fully closed
+                 1.0 = fully open
+        """
+        try:
+            # Get left gripper finger joint position
+            gripper_joint_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_JOINT, "gripper_left_finger"
+            )
+            qpos_adr = self.model.jnt_qposadr[gripper_joint_id]
+            finger_pos = self.data.qpos[qpos_adr]
+
+            # Map from joint range [-0.0081, -1e-5] to [-1, 1]
+            # -0.0081 (closed) -> -1.0
+            # -1e-5 (open) -> 1.0
+            normalized = 1.0 - 2.0 * (finger_pos / -0.0081)
+            return float(np.clip(normalized, -1.0, 1.0))
+
+        except Exception:
+            # Return neutral if gripper not available
+            return 0.0
+
+    def check_gripper_grasping(self, cube_idx: int = 0) -> bool:
+        """Check if gripper is grasping a specific cube.
+
+        Args:
+            cube_idx: Index of the cube to check
+
+        Returns:
+            True if cube is being grasped, False otherwise
+        """
+        try:
+            # Get gripper finger geometry IDs
+            left_finger_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_GEOM, "gripper_left_finger"
+            )
+            right_finger_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_GEOM, "gripper_right_finger"
+            )
+
+            # Get cube geometry ID
+            cube_geom_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_GEOM, f"cube_{cube_idx}_geom"
+            )
+
+            # Check if gripper is closed enough
+            gripper_pos = self.get_gripper_position()
+            if gripper_pos > -0.3:  # Not closed enough
+                return False
+
+            # Check for contacts between gripper fingers and cube
+            has_left_contact = False
+            has_right_contact = False
+
+            for i in range(self.data.ncon):
+                contact = self.data.contact[i]
+                geom1 = contact.geom1
+                geom2 = contact.geom2
+
+                # Check if cube is in contact with left finger
+                if (geom1 == left_finger_id and geom2 == cube_geom_id) or \
+                   (geom2 == left_finger_id and geom1 == cube_geom_id):
+                    has_left_contact = True
+
+                # Check if cube is in contact with right finger
+                if (geom1 == right_finger_id and geom2 == cube_geom_id) or \
+                   (geom2 == right_finger_id and geom1 == cube_geom_id):
+                    has_right_contact = True
+
+            # Grasping if both fingers in contact with cube
+            return has_left_contact and has_right_contact
+
+        except Exception:
+            return False

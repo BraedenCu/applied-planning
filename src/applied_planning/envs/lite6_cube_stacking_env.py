@@ -148,7 +148,9 @@ class Lite6CubeStackingEnv(gym.Env):
             "cube1_pos": cube1_pos,
             "cube2_pos": cube2_pos,
             "vertical_distance": self._prev_vertical_distance,
-            "horizontal_distance": self._prev_horizontal_distance
+            "horizontal_distance": self._prev_horizontal_distance,
+            "is_grasping": False,  # Not grasping at start
+            "gripper_pos": self.adapter.get_gripper_position()
         }
 
         return obs.astype(np.float32), info
@@ -174,11 +176,11 @@ class Lite6CubeStackingEnv(gym.Env):
         # Check for self-collision BEFORE executing the action
         has_collision = self.adapter.check_self_collision(target_joints)
 
-        # Execute action by setting joint positions directly
-        # Note: gripper control would need to be implemented in the adapter
+        # Execute action: set joint positions AND gripper
         self.adapter.set_state({
             "qpos": target_joints,
-            "qvel": np.zeros(len(target_joints))
+            "qvel": np.zeros(len(target_joints)),
+            "gripper": gripper_action  # Control gripper opening
         })
 
         # Step simulation a few times for physics to settle
@@ -197,13 +199,17 @@ class Lite6CubeStackingEnv(gym.Env):
         vertical_distance = float(abs(cube1_pos[2] - cube2_pos[2]))
         horizontal_distance = float(np.linalg.norm(cube1_pos[:2] - cube2_pos[:2]))
 
+        # Check if cube1 is being grasped
+        is_grasping = self.adapter.check_gripper_grasping(cube_idx=0)
+
         # Calculate reward
         reward = self._compute_reward(
             vertical_distance,
             horizontal_distance,
             cube1_pos[2],
             cube2_pos[2],
-            has_collision
+            has_collision,
+            is_grasping
         )
 
         # Update step counter
@@ -228,7 +234,9 @@ class Lite6CubeStackingEnv(gym.Env):
             "vertical_distance": vertical_distance,
             "horizontal_distance": horizontal_distance,
             "is_success": is_stacked,
-            "has_collision": has_collision
+            "has_collision": has_collision,
+            "is_grasping": is_grasping,
+            "gripper_pos": self.adapter.get_gripper_position()
         }
 
         # Update previous distances for next step
@@ -254,9 +262,8 @@ class Lite6CubeStackingEnv(gym.Env):
         # Get end-effector position
         ee_pos = self.adapter.get_ee_position()
 
-        # Get gripper position (if available, otherwise default to 0)
-        # This assumes gripper joint is at index 6
-        gripper_pos = self.adapter.data.qpos[6:7].copy() if len(self.adapter.data.qpos) > 6 else np.array([0.0])
+        # Get gripper position using the adapter's method
+        gripper_pos = np.array([self.adapter.get_gripper_position()])
 
         # Concatenate into flat observation
         obs = np.concatenate([cube1_pos, cube2_pos, joint_pos, ee_pos, gripper_pos])
@@ -269,7 +276,8 @@ class Lite6CubeStackingEnv(gym.Env):
         horizontal_distance: float,
         cube1_z: float,
         cube2_z: float,
-        has_collision: bool = False
+        has_collision: bool = False,
+        is_grasping: bool = False
     ) -> float:
         """Compute reward based on stacking progress and collision status.
 
@@ -279,12 +287,21 @@ class Lite6CubeStackingEnv(gym.Env):
             cube1_z: Z position of cube1
             cube2_z: Z position of cube2
             has_collision: Whether a self-collision occurred
+            is_grasping: Whether cube1 is being grasped
 
         Returns:
             Reward value
         """
         # Primary reward: minimize vertical distance when cube1 is above cube2
         reward = 0.0
+
+        # IMPORTANT: Reward grasping cube1 (critical for learning to pick up)
+        if is_grasping:
+            reward += 100.0  # Large reward for grasping
+
+            # Extra rewards when grasping and moving cube1 upward
+            if cube1_z > 0.05:  # Cube lifted off ground
+                reward += 50.0 * cube1_z  # Reward proportional to height
 
         # Encourage cube1 to be above cube2
         if cube1_z > cube2_z:
