@@ -54,6 +54,8 @@ python scripts/demo_path_planning.py --planner linear
 
 # Run headless (no viewer)
 python scripts/demo_path_planning.py --no-viewer
+
+# On a macbook, you will need to run with mjpython to actually see the mujoco viewer
 ```
 
 **Note:** The interactive MuJoCo viewer only works when running as a Python script. It does **not** work in Jupyter notebooks on macOS.
@@ -61,6 +63,7 @@ python scripts/demo_path_planning.py --no-viewer
 ## Usage Example
 
 ### Python Script
+
 ```python
 from applied_planning.sim.adapters.mujoco_backend import MujocoLite6Adapter
 import numpy as np
@@ -88,6 +91,7 @@ else:
 ```
 
 ### Jupyter Notebook
+
 ```python
 # Note: Interactive viewer doesn't work in notebooks on macOS
 # Use headless or offscreen rendering instead
@@ -123,6 +127,7 @@ if sim.render_mode == "offscreen":
 ## Architecture
 
 **Modular design** with swappable components:
+
 - **Sim Adapters**: MuJoCo (current), Isaac Sim (future)
 - **Planners**: RRT, linear interpolation, Cartesian planning (IK-based)
 - **Controllers**: Joint velocity/torque, Cartesian impedance
@@ -152,16 +157,19 @@ uv pip install mujoco
 ## Path Planning Methods
 
 ### RRT (Rapidly-exploring Random Tree)
+
 - Samples random configurations in joint space
 - Efficient for high-DOF robots with obstacles
 - Probabilistically complete
 
 ### Linear Interpolation
+
 - Fast, straight-line paths in joint space
 - Good for obstacle-free environments
 - Useful for quick testing
 
 ### Cartesian Planning
+
 - Plans in task space (end-effector pose)
 - Requires inverse kinematics solver
 - Ideal for precise positioning tasks

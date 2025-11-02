@@ -5,6 +5,10 @@ import numpy as np
 import time
 import mujoco
 import mujoco.viewer as mj_viewer  # type: ignore
+import xml.etree.ElementTree as ET
+import tempfile
+import os
+from pathlib import Path
 
 from ...control.planners import plan_joint_path, plan_cartesian_path
 from ...control.kinematics import MujocoIKSolver, compute_forward_kinematics
@@ -12,11 +16,8 @@ from .base import Action, Observation, SimulationAdapter
 
 
 class MujocoLite6Adapter(SimulationAdapter):
-    """MuJoCo simulation adapter for uFactory Lite 6 with path planning support.
-
-    Note: This is a skeleton. It avoids importing MuJoCo at module import time
-    so the package can be installed without MuJoCo initially. Instantiation or
-    method calls will fail with a clear error if MuJoCo is not available.
+    """
+    MuJoCo simulation adapter for uFactory Lite 6 with path planning support.
     """
 
     def __init__(
@@ -29,7 +30,8 @@ class MujocoLite6Adapter(SimulationAdapter):
         num_cubes: int = 0,
         cube_placement_radius: float = 0.3
     ) -> None:
-        """Initialize MuJoCo adapter for Lite 6.
+        """
+        Initialize MuJoCo adapter for Lite 6.
 
         Args:
             model_path: Path to MuJoCo XML model
@@ -54,7 +56,7 @@ class MujocoLite6Adapter(SimulationAdapter):
         self.num_cubes = num_cubes
         self.cube_placement_radius = cube_placement_radius
 
-        # Load model with cubes if requested
+        # load model with cubes if requested
         if num_cubes > 0:
             self.model = self._load_model_with_cubes(model_path, num_cubes, cube_placement_radius)
         else:
@@ -89,11 +91,6 @@ class MujocoLite6Adapter(SimulationAdapter):
         Returns:
             MuJoCo model with cubes added
         """
-        import xml.etree.ElementTree as ET
-        import tempfile
-        import os
-        from pathlib import Path
-
         model_path_obj = Path(model_path)
         model_dir = model_path_obj.parent
 
@@ -245,6 +242,9 @@ class MujocoLite6Adapter(SimulationAdapter):
             np.random.seed(seed)
         mujoco.mj_resetData(self.model, self.data)
 
+        # Reset velocity integration target
+        self._target_qpos = self.data.qpos[:6].copy()
+
         # Randomize cube positions if requested
         if randomize_cubes and self.num_cubes > 0:
             self._randomize_cube_positions()
@@ -268,10 +268,21 @@ class MujocoLite6Adapter(SimulationAdapter):
         return {"qpos": self.data.qpos.copy(), "qvel": self.data.qvel.copy()}
 
     def step(self, action: Action) -> Tuple[Observation, float, bool, Dict[str, Any]]:
-        # Expect action as joint velocity or torque; for now assume joint velocity dict
+        # Expect action as joint velocity or torque
+        #   assume joint velocity dict
         qvel_cmd = action.get("qvel")
         if qvel_cmd is not None:
-            self.data.qvel[: len(qvel_cmd)] = np.asarray(qvel_cmd)
+            qvel_cmd = np.asarray(qvel_cmd)
+            # For position-controlled actuators, integrate velocity to get target position
+            # Use ctrl to maintain the integrated target position across steps
+            if not hasattr(self, '_target_qpos'):
+                self._target_qpos = self.data.qpos[:len(qvel_cmd)].copy()
+
+            # Integrate velocity command
+            self._target_qpos += qvel_cmd * self.control_dt
+
+            # Set actuator control targets
+            self.data.ctrl[: len(qvel_cmd)] = self._target_qpos
         mujoco.mj_step(self.model, self.data)
         if self._viewer is not None:
             self._viewer.sync()
@@ -288,13 +299,17 @@ class MujocoLite6Adapter(SimulationAdapter):
         qpos = state.get("qpos")
         qvel = state.get("qvel")
         if qpos is not None:
-            self.data.qpos[: len(qpos)] = np.asarray(qpos)
+            qpos_array = np.asarray(qpos)
+            self.data.qpos[: len(qpos)] = qpos_array
+            # update velocity control target to match new position
+            self._target_qpos = qpos_array[:6].copy() if len(qpos_array) >= 6 else qpos_array.copy()
         if qvel is not None:
             self.data.qvel[: len(qvel)] = np.asarray(qvel)
         mujoco.mj_forward(self.model, self.data)
 
     def render(self, mode: str = "human", camera_id: Optional[int] = None):
-        """Render the current scene.
+        """
+        Render the current scene.
 
         Args:
             mode: "human" for viewer sync, "rgb_array" for offscreen rendering
