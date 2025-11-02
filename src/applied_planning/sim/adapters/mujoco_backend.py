@@ -484,6 +484,72 @@ class MujocoLite6Adapter(SimulationAdapter):
 
         return has_collision
 
+    def check_self_collision(self, q: Optional[np.ndarray] = None) -> bool:
+        """Check if the robot is in self-collision.
+
+        This method specifically checks for self-collisions between robot links,
+        excluding collisions with environment objects (cubes, floor, etc.).
+
+        Args:
+            q: Optional joint configuration to check; if None, use current state
+
+        Returns:
+            True if self-collision detected, False otherwise
+        """
+        if q is not None:
+            # Temporarily set configuration
+            old_qpos = self.data.qpos.copy()
+            old_qvel = self.data.qvel.copy()
+            self.data.qpos[:len(q)] = q
+            self.data.qvel[:len(q)] = 0  # Zero velocity for static check
+            mujoco.mj_forward(self.model, self.data)
+
+        # Get robot body and geom names for filtering
+        robot_geom_names = {
+            'link_base_c', 'link1_c', 'link2_c', 'link3_c',
+            'link4_c', 'link5_c', 'link6_c', 'gripper_lite_body_c',
+            'gripper_left_finger', 'gripper_right_finger'
+        }
+
+        # Check all contacts
+        has_self_collision = False
+        for i in range(self.data.ncon):
+            contact = self.data.contact[i]
+
+            # Get the two geoms involved in contact
+            geom1_id = contact.geom1
+            geom2_id = contact.geom2
+
+            # Get geom names
+            try:
+                geom1_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, geom1_id)
+                geom2_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, geom2_id)
+
+                # Check if both geoms belong to the robot (self-collision)
+                # Ignore None names (can happen with some geometries)
+                if geom1_name and geom2_name:
+                    is_geom1_robot = geom1_name in robot_geom_names
+                    is_geom2_robot = geom2_name in robot_geom_names
+
+                    # Self-collision if both geoms are robot parts
+                    if is_geom1_robot and is_geom2_robot:
+                        # Filter out adjacent link collisions (these are expected)
+                        # Adjacent links should not collide in normal operation, but we can
+                        # add a filter here if needed
+                        has_self_collision = True
+                        break
+            except Exception:
+                # If we can't get names, skip this contact
+                continue
+
+        if q is not None:
+            # Restore original configuration
+            self.data.qpos[:] = old_qpos
+            self.data.qvel[:] = old_qvel
+            mujoco.mj_forward(self.model, self.data)
+
+        return has_self_collision
+
     def get_end_effector_pose(self) -> np.ndarray:
         """Get current end-effector pose.
 
