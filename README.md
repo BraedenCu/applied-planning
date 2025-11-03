@@ -135,8 +135,6 @@ if sim.render_mode == "offscreen":
 - **Controllers**: Joint velocity/torque, Cartesian impedance
 - **Environments**: Gymnasium API for RL integration
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed system design.
-
 ## Installation
 
 ```bash
