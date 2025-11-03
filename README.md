@@ -20,7 +20,9 @@ uv pip install mujoco
 
 # Fetch robot assets
 python scripts/fetch_menagerie_lite6.py
+```
 
+```bash
 # Run path planning demo with real-time visualization
 python scripts/demo_path_planning.py
 
