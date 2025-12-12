@@ -19,6 +19,7 @@ dependencies = [
   "tensorboard",
   "tqdm",
   "rich",
+  "pyrealsense2 ; sys_platform != 'darwin'",
 ]
 
 [project.optional-dependencies]
